@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Learning Management System</title>
+<style>
+:root{--bg:#f1f5f9;--card:#fff;--tx:#1e293b;--mu:#64748b;--br:#cbd5e1;--pr:#1d4ed8;--prh:#1e40af;--ok:#16a34a;--bad:#dc2626}
+@media (prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#0f172a;--card:#1e293b;--tx:#e2e8f0;--mu:#94a3b8;--br:#334155;--pr:#3b82f6;--prh:#2563eb}}
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--tx)}
+header{background:var(--pr);color:#fff;padding:12px 20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+header b{font-size:18px}
+nav{display:flex;gap:6px;flex-wrap:wrap}
+nav button{background:transparent;color:#fff;border:0;padding:8px 12px;border-radius:8px;cursor:pointer;font-weight:600}
+nav button.on,nav button:hover{background:rgba(255,255,255,.2)}
+main{max-width:960px;margin:20px auto;padding:0 16px}
+.card{background:var(--card);border:1px solid var(--br);border-radius:12px;padding:18px;margin-bottom:16px;overflow-x:auto}
+h2{margin:0 0 12px}h3{margin:0 0 8px}
+label{display:block;font-size:13px;font-weight:600;margin:10px 0 4px}
+input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--br);border-radius:8px;background:var(--card);color:var(--tx);font:inherit}
+textarea{min-height:110px}
+.btn{background:var(--pr);color:#fff;border:0;padding:9px 16px;border-radius:8px;font-weight:600;cursor:pointer;margin-top:10px}
+.btn:hover{background:var(--prh)}
+.btn.s{background:transparent;color:var(--tx);border:1px solid var(--br)}
+.btn.d{background:var(--bad)}
+.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+.tag{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;background:var(--pr);color:#fff;margin-right:4px}
+.mu{color:var(--mu);font-size:13px}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:8px;border-bottom:1px solid var(--br);font-size:14px}
+th{font-size:12px;text-transform:uppercase;color:var(--mu)}
+.q{border:1px solid var(--br);border-radius:10px;padding:12px;margin:10px 0}
+.opt{display:block;font-weight:400;margin:4px 0}
+.opt input{width:auto;margin-right:6px}
+.big{font-size:30px;font-weight:700}
+.ok{color:var(--ok)}.bad{color:var(--bad)}
+.login{max-width:420px;margin:60px auto}
+.err{color:var(--bad);font-size:13px;min-height:18px;margin-top:8px}
+.file-attach{margin-top:8px;padding:8px;background:rgba(0,0,0,0.04);border-radius:6px;font-size:13px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script>
+
+/* =========== SETUP: Firebase config =========== */
+const FIREBASE_CONFIG={
+ apiKey:"AIzaSyBiQeudblgek02MQo1TsJSXoAAOw30CQgM",authDomain:"classroom-76d38.firebaseapp.com",projectId:"classroom-76d38",appId:"1:637359880930:web:b71459ae37f955d0783cbb"};
+
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+firebase.initializeApp(FIREBASE_CONFIG);
+const auth=firebase.auth(),db=firebase.firestore(),col=n=>db.collection(n);
+
+/* live copy of the database */
+const D={},active={},dying=new Set();
+const flat=p=>Object.keys(D).filter(k=>k.startsWith(p)).flatMap(k=>D[k]);
+const S={
+ get hosted(){return (D.hosted||[]).filter(s=>!dying.has(s.id))},
+ get mine(){return D.mine||[]},
+ get joined(){return flat('sec:')},
+ get sections(){return [...this.hosted,...this.joined]},
+ get materials(){return flat('mat:')},
+ get activities(){return flat('act:')},
+ get subs(){return [...flat('hsub:'),...(D.mysubs||[])]},
+ get students(){return flat('mem:').map(m=>({id:m.student,mid:m.id,section:m.section,name:m.name,email:m.email}))}
+};
+let me=null,authed=null,loaded={},msg='',mode=null,joinInfo=null;
+let tab='',draft=null,taking=null,trackSec='all',trackStu=null,pend=false;
+let uploadedFileMeta=null;
+let joinCode=(new URLSearchParams(location.search).get('join')||'').trim().toLowerCase()||null;
+const LEVELS=['Beginner','Intermediate','Advanced'];
+const secName=id=>(S.sections.find(s=>s.id===id)||{}).name||'-';
+const joinLink=s=>location.origin+location.pathname+'?join='+s.id;
+const curMode=()=>mode||(S.hosted.length?'teacher':S.mine.length?'student':null);
+
+/* ---------- auth + live data ---------- */
+function signIn(){
+ msg='';const p=new firebase.auth.GoogleAuthProvider();p.setCustomParameters({prompt:'select_account'});
+ auth.signInWithPopup(p).catch(e=>{msg=e.message;render()})
+}
+function logout(){auth.signOut()}
+function unlisten(k){if(active[k]){active[k]();delete active[k]}delete D[k];delete loaded[k]}
+function stop(){Object.keys(active).forEach(unlisten);Object.keys(D).forEach(k=>delete D[k]);loaded={};dying.clear()}
+const BASE=['hosted','mine','mysubs'];
+function listen(k,q){
+ if(active[k])return;
+ active[k]=q.onSnapshot(s=>{D[k]=s.docs.map(d=>({id:d.id,...d.data()}));loaded[k]=1;sync()},
+  e=>{console.error(k,e);if(e.code==='permission-denied'&&!BASE.includes(k))return;msg='Database error ('+k+'): '+e.code;loaded[k]=1;render()})
+}
+function listenDoc(k,ref){
+ if(active[k])return;
+ active[k]=ref.onSnapshot(d=>{D[k]=d.exists?[{id:d.id,...d.data()}]:[];loaded[k]=1;sync()},
+  e=>{console.error(k,e);if(e.code==='permission-denied')return;msg='Database error ('+k+'): '+e.code;render()})
+}
+
+function wire(){
+ if(!authed)return;
+ const want=new Set();
+ S.hosted.forEach(s=>['mat','act','hsub','mem'].forEach(p=>want.add(p+':'+s.id)));
+ S.mine.forEach(m=>['sec','mat','act'].forEach(p=>want.add(p+':'+m.section)));
+ want.forEach(k=>{
+  const i=k.indexOf(':'),p=k.slice(0,i),id=k.slice(i+1);
+  if(p==='mat')listen(k,col('materials').where('section','==',id));
+  else if(p==='act')listen(k,col('activities').where('section','==',id));
+  else if(p==='hsub')listen(k,col('subs').where('section','==',id));
+  else if(p==='mem')listen(k,col('members').where('section','==',id));
+  else if(p==='sec')listenDoc(k,col('sections').doc(id));
+ });
+ Object.keys(active).filter(k=>k.includes(':')&&!want.has(k)).forEach(unlisten);
+}
+auth.onAuthStateChanged(u=>{
+ stop();authed=u;mode=null;joinInfo=null;me=u?{id:u.uid,name:u.displayName||u.email||'Me',email:(u.email||'').toLowerCase()}:null;
+ if(u){
+  listen('hosted',col('sections').where('host','==',u.uid));
+  listen('mine',col('members').where('student','==',u.uid));
+  listen('mysubs',col('subs').where('student','==',u.uid));
+  fetchJoin();
+ }
+ render();
+});
+function sync(){wire();soft()}
+async function fetchJoin(){
+ if(!authed||!joinCode)return;
+ try{const d=await col('sections').doc(joinCode).get();joinInfo=d.exists?{id:d.id,...d.data()}:{bad:1}}
+ catch(e){console.error(e);joinInfo={bad:1}}
+ render();
+}
+function soft(){
+ const a=document.activeElement;
+ if(taking)return;
+ if(a&&/INPUT|TEXTAREA|SELECT/.test(a.tagName)&&!a.readOnly){pend=true;return}
+ render();
+}
+document.addEventListener('focusout',()=>{if(pend){pend=false;setTimeout(()=>{if(!taking)render()},300)}});
+
+/* ---------- AI Quiz Generator ---------- */
+function generate(text,n,types){
+ const cleanText=text.replace(/[^a-zA-Z0-9\s.!?]/g,' ');
+ const sents=cleanText.split(/(?<=[.!?])\s+/).map(s=>s.trim()).filter(s=>s.split(' ').length>=3);
+ const words=[...new Set(cleanText.match(/[A-Za-z]{4,}/g)||[])];
+ 
+ if(!sents.length || words.length<3){
+  const defaultWords = words.length>=3 ? words : ['Concept', 'Theory', 'Analysis', 'Result', 'Principle', 'Process'];
+  const qs=[];
+  for(let i=0; i<n; i++){
+   const w = defaultWords[i % defaultWords.length];
+   const t = types[i % types.length];
+   if(t==='tf'){
+    qs.push({t:'tf', q:`Is ${w} key to understanding ${cleanText.slice(0,30)}?`, a:'True'});
+   }else if(t==='mc'){
+    const ch = [w, ...defaultWords.filter(x=>x!==w).slice(0,3)].sort(()=>Math.random()-.5);
+    qs.push({t:'mc', q:`Select the primary topic associated with item ${i+1}:`, ch, a:w});
+   }else{
+    qs.push({t:'id', q:`Identify the term for item ${i+1}:`, a:w});
+   }
+  }
+  return qs;
+ }
+
+ const qs=[];
+ sents.forEach((s,i)=>{
+  if(qs.length>=n)return;
+  const t=types[i%types.length],w=s.match(/[A-Za-z]{5,}/g);
+  if(!w)return;
+  const key=w.sort((a,b)=>b.length-a.length)[0];
+  if(t==='tf'){
+   const fake=i%2===1,other=words.find(x=>x.toLowerCase()!==key.toLowerCase()&&x.length>=4)||'solution';
+   qs.push({t:'tf',q:fake?s.replace(key,other):s,a:fake?'False':'True'});
+  }else if(t==='mc'){
+   const ch=[key,...words.filter(x=>x.toLowerCase()!==key.toLowerCase()).sort(()=>Math.random()-.5).slice(0,3)].sort(()=>Math.random()-.5);
+   if(ch.length<2) ch.push('Option B', 'Option C', 'Option D');
+   qs.push({t:'mc',q:s.replace(key,'_____'),ch,a:key});
+  }else qs.push({t:'id',q:s.replace(key,'_____'),a:key});
+ });
+ return qs;
+}
+function grade(act,ans){let sc=0;act.qs.forEach((q,i)=>{if(String(ans[i]||'').trim().toLowerCase()===String(q.a).toLowerCase())sc++});return sc}
+
+function scoped(){
+ const ids=S.hosted.map(s=>s.id);
+ return {sections:S.hosted,students:S.students.filter(u=>ids.includes(u.section)),
+  materials:S.materials.filter(m=>ids.includes(m.section)),activities:S.activities.filter(a=>ids.includes(a.section)),
+  subs:S.subs.filter(x=>ids.includes(x.section))};
+}
+
+/* ---------- Views ---------- */
+function render(){
+ const A=document.getElementById('app');
+ if(!authed){A.innerHTML=loginView();return}
+ if(!(loaded.hosted&&loaded.mine)){A.innerHTML=`<div class="login card">Loading...<div class="err">${esc(msg)}</div></div>`;return}
+ const m=curMode();
+ if(!m){A.innerHTML=onboardView();return}
+ const tabs=m==='teacher'?['Dashboard','Tracking','Sections','Materials','Create Quiz','Activities','Results']:['Lessons','Activities','My Scores','Classes'];
+ if(!tab||!tabs.includes(tab))tab=tabs[0];
+ A.innerHTML=`<header><b>AI LMS &middot; ${esc(me.name)} (${m})</b>
+ <nav>${tabs.map(t=>`<button class="${t===tab?'on':''}" onclick="go('${t}')">${t}</button>`).join('')}<button onclick="switchMode()">${m==='teacher'?'Student view':'Teacher view'}</button><button onclick="logout()">Log out</button></nav></header>
+ <main>${joinBanner()}${msg?`<div class="card bad">${esc(msg)}</div>`:''}${taking?takeView():body()}</main>`;
+}
+function body(){
+ const f={Dashboard,Tracking,Sections,Materials,'Create Quiz':CreateQuiz,Activities,Results,Lessons,'My Scores':MyScores,Classes};
+ return (tab==='Activities'&&curMode()==='student'?StudentActs:f[tab])();
+}
+function switchMode(){mode=curMode()==='teacher'?'student':'teacher';tab='';taking=null;msg='';render()}
+function loginView(){
+ return `<div class="login card"><h2>AI Learning Management System</h2>
+ ${joinCode?'<p>You were invited to join a class. Sign in with your Google account to continue.</p>':'<p class="mu">Sign in with your Gmail / Google account.</p>'}
+ <button class="btn" style="width:100%" onclick="signIn()">Sign in with Google</button>
+ <div class="err">${esc(msg)}</div></div>`;
+}
+function onboardView(){
+ return `<div class="login card"><h2>Welcome, ${esc(authed.displayName||'')}</h2>
+ <p class="mu">Signed in as ${esc(authed.email)}</p>
+ ${joinBanner()}
+ <h3>Join a class as a student</h3>
+ <label>Class join code (from your teacher)</label><input id="jc" value="${esc(joinCode||'')}">
+ <button class="btn" onclick="joinByCode(val('jc'))">Join class</button>
+ <h3 style="margin-top:16px">Or create a class as a teacher</h3>
+ <label>Class name</label><input id="sn">
+ <button class="btn" onclick="addSec()">Create class</button>
+ <div class="err">${esc(msg)}</div>
+ <button class="btn s" onclick="logout()">Sign out</button></div>`;
+}
+function joinBanner(){
+ if(!joinCode||!joinInfo)return '';
+ if(joinInfo.bad)return '<div class="card bad">That join link is not valid. Ask your teacher for a new one.</div>';
+ if(S.hosted.some(s=>s.id===joinInfo.id)||S.mine.some(m=>m.section===joinInfo.id))return '';
+ return `<div class="card"><b>Join ${esc(joinInfo.name)}?</b> <span class="mu">Teacher: ${esc(joinInfo.hostName||'-')}</span><br>
+ <button class="btn" onclick="joinByCode(joinCode)">Join this section</button> <button class="btn s" onclick="joinCode=null;joinInfo=null;history.replaceState(null,'',location.pathname);render()">No thanks</button></div>`;
+}
+function Dashboard(){
+ const S=scoped();
+ const scored=S.subs.map(s=>s.score/s.total*100),avg=scored.length?Math.round(scored.reduce((a,b)=>a+b,0)/scored.length):0;
+ return `<div class="row">
+ ${[['Students',S.students.length],['Sections',S.sections.length],['Lessons',S.materials.length],['Activities',S.activities.length],['Submissions',S.subs.length],['Average score',avg+'%']]
+ .map(([k,v])=>`<div class="card"><div class="mu">${k}</div><div class="big">${v}</div></div>`).join('')}</div>`;
+}
+function Tracking(){
+ const V=scoped(),now=new Date();
+ const rows=V.students.filter(u=>trackSec==='all'||u.section===trackSec).map(u=>{
+  const acts=V.activities.filter(a=>a.section===u.section),subs=V.subs.filter(x=>x.student===u.id&&x.section===u.section);
+  const done=acts.filter(a=>subs.some(x=>x.act===a.id)).length;
+  const missed=acts.filter(a=>a.due&&new Date(a.due)<now&&!subs.some(x=>x.act===a.id)).length;
+  const pct=subs.length?Math.round(subs.reduce((t,x)=>t+x.score/x.total*100,0)/subs.length):null;
+  const last=subs.length?Math.max(...subs.map(x=>x.at||0)):0;
+  const st=!acts.length?['No activities','mu']:(missed||(pct!==null&&pct<60))?['Needs attention','bad']:pct===null?['Not started','mu']:['On track','ok'];
+  return {u,acts,subs,done,missed,pct,last,st};});
+ const d=trackStu&&rows.find(r=>r.u.mid===trackStu);
+ return `<div class="card"><h2>Student tracking</h2>
+ <label>Section</label><select onchange="trackSec=this.value;trackStu=null;render()"><option value="all">All my sections</option>${V.sections.map(s=>`<option value="${s.id}" ${s.id===trackSec?'selected':''}>${esc(s.name)}</option>`).join('')}</select>
+ <p class="mu">Click a student to see every activity.</p>
+ <table><tr><th>Student</th><th>Done</th><th>Average</th><th>Missed</th><th>Last submitted</th><th>Status</th></tr>
+ ${rows.map(r=>`<tr style="cursor:pointer" onclick="trackStu='${r.u.mid}';render()"><td>${esc(r.u.name)}<div class="mu">${esc(secName(r.u.section))}</div></td><td>${r.done}/${r.acts.length}</td><td>${r.pct===null?'-':r.pct+'%'}</td><td>${r.missed}</td><td>${r.last?new Date(r.last).toLocaleDateString():'-'}</td><td class="${r.st[1]}"><b>${r.st[0]}</b></td></tr>`).join('')||'<tr><td colspan=6 class="mu">No students yet.</td></tr>'}</table></div>
+ ${d?trackDetail(d,now):''}`;
+}
+function trackDetail(d,now){
+ return `<div class="card"><h3>${esc(d.u.name)} &middot; ${esc(secName(d.u.section))}</h3>
+ <table><tr><th>Activity</th><th>Due</th><th>Result</th></tr>
+ ${d.acts.map(a=>{const x=d.subs.find(s=>s.act===a.id),late=a.due&&new Date(a.due)<now;
+ return `<tr><td>${esc(a.title)}</td><td>${a.due?new Date(a.due).toLocaleString():'-'}</td><td>${x?`<span class="ok">${x.score}/${x.total} (${Math.round(x.score/x.total*100)}%)</span>`:late?'<span class="bad">Missed</span>':'<span class="mu">Pending</span>'}</td></tr>`}).join('')||'<tr><td colspan=3 class="mu">No activities yet.</td></tr>'}</table>
+ <button class="btn s" onclick="trackStu=null;render()">Close</button></div>`;
+}
+function Sections(){
+ const V=scoped();
+ return `<div class="card"><h2>My sections (you are the teacher)</h2>
+ <table><tr><th>Name</th><th>Students</th><th></th></tr>
+ ${V.sections.map(s=>`<tr><td>${esc(s.name)}</td><td>${V.students.filter(u=>u.section===s.id).length}</td>
+ <td><button class="btn d" style="margin:0" onclick="delSec('${s.id}')">Delete</button></td></tr>`).join('')||'<tr><td colspan=3 class="mu">You have not created a section yet.</td></tr>'}</table>
+ ${V.sections.length?`<h3 style="margin-top:14px">Join links for your students</h3>${V.sections.map(s=>`<label>${esc(s.name)} &middot; code ${esc(s.id)}</label><div style="display:flex;gap:6px"><input readonly value="${esc(joinLink(s))}" onclick="this.select()"><button class="btn s" style="margin:0" onclick="copyLink(this,'${s.id}')">Copy</button></div>`).join('')}<p class="mu">Students open the link or enter the code to join.</p>`:''}
+ <label>New section name</label><input id="sn"><button class="btn" onclick="addSec()">Create section</button></div>
+ <div class="card"><h2>My students</h2>
+ <table><tr><th>Name</th><th>Gmail</th><th>Section</th><th></th></tr>
+ ${V.students.map(u=>`<tr><td>${esc(u.name)}</td><td>${esc(u.email)}</td><td>${esc(secName(u.section))}</td>
+ <td><button class="btn d" style="margin:0" onclick="delStu('${u.mid}')">Remove</button></td></tr>`).join('')||'<tr><td colspan=4 class="mu">No students yet.</td></tr>'}</table></div>`;
+}
+function Materials(){
+ const S=scoped();
+ return `<div class="card"><h2>Upload lesson</h2>
+ <label>Title</label><input id="mt">
+ <div class="row"><div><label>Level</label><select id="ml">${LEVELS.map(l=>`<option>${l}</option>`).join('')}</select></div>
+ <div><label>Section</label><select id="ms">${S.sections.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></div></div>
+ <label>Lesson file (Any file format: PDF, DOCX, TXT, Images, etc.)</label>
+ <input type="file" id="mf" onchange="readFile(this)">
+ <textarea id="mx" placeholder="Paste or type lesson content here"></textarea>
+ <button class="btn" onclick="addMat()">Save lesson</button></div>
+ <div class="card"><h2>Lessons</h2>${S.materials.map(m=>`<div class="q"><span class="tag">${m.level}</span><b>${esc(m.title)}</b>
+ <span class="mu"> &middot; ${esc(secName(m.section))}</span>
+ ${m.fileMeta ? `<div class="file-attach">📎 <b>Attachment:</b> <a href="${m.fileMeta.dataUrl}" download="${esc(m.fileMeta.name)}" target="_blank">${esc(m.fileMeta.name)}</a> (${Math.round(m.fileMeta.size/1024)} KB)</div>` : ''}
+ <button class="btn d" style="float:right;margin:0" onclick="delMat('${m.id}')">Delete</button></div>`).join('')||'<p class="mu">None yet.</p>'}</div>`;
+}
+function CreateQuiz(){
+ const S=scoped();
+ let h=`<div class="card"><h2>Generate quiz from a lesson</h2>
+ <label>Lesson</label><select id="gm">${S.materials.map(m=>`<option value="${m.id}">${esc(m.title)}</option>`).join('')}</select>
+ <div class="row"><div><label>Number of questions</label><input id="gn" type="number" value="5" min="1" max="20"></div>
+ <div><label>Types</label><select id="gt"><option value="mix">Mixed</option><option value="mc">Multiple choice</option><option value="tf">True / False</option><option value="id">Identification</option></select></div></div>
+ <button class="btn" onclick="gen()">Generate</button></div>`;
+ if(draft){
+  h+=`<div class="card"><h2>Preview &amp; edit</h2>
+  <label>Activity title</label><input id="at" value="${esc(draft.title)}">
+  <div class="row"><div><label>Level</label><select id="al">${LEVELS.map(l=>`<option ${l===draft.level?'selected':''}>${l}</option>`).join('')}</select></div>
+  <div><label>Publish to section</label><select id="as">${S.sections.map(s=>`<option value="${s.id}" ${s.id===draft.section?'selected':''}>${esc(s.name)}</option>`).join('')}</select></div>
+  <div><label>Deadline</label><input type="datetime-local" id="ad"></div></div>
+  ${draft.qs.map((q,i)=>`<div class="q"><span class="tag">${q.t.toUpperCase()}</span>
+  <label>Question</label><textarea style="min-height:50px" onchange="draft.qs[${i}].q=this.value">${esc(q.q)}</textarea>
+  ${q.ch?`<label>Choices (one per line)</label><textarea style="min-height:70px" onchange="draft.qs[${i}].ch=this.value.split('\\n')">${esc(q.ch.join('\n'))}</textarea>`:''}
+  <label>Answer key</label><input value="${esc(q.a)}" onchange="draft.qs[${i}].a=this.value">
+  <button class="btn s" onclick="draft.qs.splice(${i},1);render()">Delete question</button></div>`).join('')}
+  <button class="btn" onclick="publish()">Save &amp; publish</button></div>`;
+ }
+ return h;
+}
+function Activities(){
+ const S=scoped();
+ return `<div class="card"><h2>Activities</h2>${S.activities.map(a=>`<div class="q"><span class="tag">${a.level}</span><b>${esc(a.title)}</b>
+ <div class="mu">${esc(secName(a.section))} &middot; ${a.qs.length} questions &middot; due ${a.due?new Date(a.due).toLocaleString():'no deadline'}</div>
+ <button class="btn d" onclick="delAct('${a.id}')">Delete</button></div>`).join('')||'<p class="mu">No activities yet.</p>'}</div>`;
+}
+function Results(){
+ const S=scoped();
+ return `<div class="card"><h2>Results</h2><table><tr><th>Student</th><th>Activity</th><th>Score</th></tr>
+ ${S.subs.map(s=>{const a=S.activities.find(x=>x.id===s.act),u=S.students.find(x=>x.id===s.student&&x.section===s.section);
+ return `<tr><td>${esc(u&&u.name)}</td><td>${esc(a&&a.title)}</td><td>${s.score}/${s.total} (${Math.round(s.score/s.total*100)}%)</td></tr>`}).join('')||'<tr><td colspan=3 class="mu">No submissions yet.</td></tr>'}</table></div>`;
+}
+/* student */
+function Lessons(){
+ const ids=S.mine.map(m=>m.section),mine=S.materials.filter(m=>ids.includes(m.section));
+ return LEVELS.map(l=>{const ms=mine.filter(m=>m.level===l);
+  return ms.length?`<div class="card"><h2>${l}</h2>${ms.map(m=>`<div class="q"><b>${esc(m.title)}</b> <span class="mu">&middot; ${esc(secName(m.section))}</span><p style="white-space:pre-wrap">${esc(m.text||'')}</p>
+  ${m.fileMeta ? `<div class="file-attach">📎 <b>Attachment:</b> <a href="${m.fileMeta.dataUrl}" download="${esc(m.fileMeta.name)}" target="_blank">${esc(m.fileMeta.name)}</a></div>` : ''}
+  </div>`).join('')}</div>`:''}).join('')||'<div class="card">No lessons in your classes yet.</div>';
+}
+function StudentActs(){
+ const ids=S.mine.map(m=>m.section),mine=S.activities.filter(a=>ids.includes(a.section));
+ return `<div class="card"><h2>Activities</h2>${mine.map(a=>{
+  const sub=S.subs.find(s=>s.act===a.id&&s.student===me.id),late=a.due&&new Date(a.due)<new Date();
+  return `<div class="q"><span class="tag">${a.level}</span><b>${esc(a.title)}</b>
+  <div class="mu">${esc(secName(a.section))} &middot; ${a.qs.length} questions &middot; due ${a.due?new Date(a.due).toLocaleString():'no deadline'}</div>
+  ${sub?`<div class="ok">Submitted: ${sub.score}/${sub.total}</div>`:late?'<div class="bad">Deadline passed</div>':`<button class="btn" onclick="startAct('${a.id}')">Take activity</button>`}</div>`}).join('')||'<p class="mu">Nothing published to your classes yet.</p>'}</div>`;
+}
+function Classes(){
+ return `<div class="card"><h2>My classes</h2><table><tr><th>Class</th><th>Teacher</th><th></th></tr>
+ ${S.mine.map(m=>{const s=S.joined.find(x=>x.id===m.section)||{};return `<tr><td>${esc(s.name||'-')}</td><td>${esc(s.hostName||'-')}</td><td><button class="btn d" style="margin:0" onclick="leaveClass('${m.id}')">Leave</button></td></tr>`}).join('')||'<tr><td colspan=3 class="mu">You have not joined a class yet.</td></tr>'}</table>
+ <label>Join another class with a code</label><input id="jc"><button class="btn" onclick="joinByCode(val('jc'))">Join class</button></div>
+ <div class="card"><h2>Teach a class</h2>
+ <label>Class name</label><input id="sn"><button class="btn" onclick="addSec()">Create class</button></div>`;
+}
+function takeView(){
+ const a=S.activities.find(x=>x.id===taking);
+ return `<div class="card"><h2>${esc(a.title)}</h2>${a.qs.map((q,i)=>`<div class="q"><b>${i+1}. ${esc(q.q)}</b>
+ ${q.t==='mc'?q.ch.map(c=>`<label class="opt"><input type="radio" name="q${i}" value="${esc(c)}">${esc(c)}</label>`).join('')
+ :q.t==='tf'?['True','False'].map(c=>`<label class="opt"><input type="radio" name="q${i}" value="${c}">${c}</label>`).join('')
+ :`<input name="q${i}" placeholder="Your answer">`}</div>`).join('')}
+ <button class="btn" onclick="submitAct()">Submit</button> <button class="btn s" onclick="taking=null;render()">Cancel</button></div>`;
+}
+function MyScores(){
+ const mine=S.subs.filter(s=>s.student===me.id);
+ return `<div class="card"><h2>My scores</h2><table><tr><th>Activity</th><th>Score</th></tr>
+ ${mine.map(s=>{const a=S.activities.find(x=>x.id===s.act);return `<tr><td>${esc(a&&a.title)}</td><td>${s.score}/${s.total}</td></tr>`}).join('')||'<tr><td colspan=2 class="mu">No scores yet.</td></tr>'}</table></div>`;
+}
+
+/* ---------- Actions ---------- */
+const val=id=>document.getElementById(id).value;
+const fail=e=>{console.error(e);msg='Action failed: '+(e.code||e.message);render()};
+function go(t){tab=t;taking=null;msg='';render()}
+function copyLink(b,id){
+ const l=joinLink(S.sections.find(x=>x.id===id)),i=b.previousElementSibling;
+ const ok=()=>{b.textContent='Copied!';setTimeout(()=>b.textContent='Copy',1500)},no=()=>{i.select();b.textContent='Press Ctrl+C'};
+ try{navigator.clipboard.writeText(l).then(ok,no)}catch(e){no()}
+}
+function newCode(){
+ const a=new Uint8Array(10),c='abcdefghijkmnpqrstuvwxyz23456789';crypto.getRandomValues(a);
+ return Array.from(a,x=>c[x%32]).join('');
+}
+function addSec(){
+ const el=document.getElementById('sn'),n=el?el.value.trim():'';
+ if(!n){msg='Type a class name first.';render();return}
+ col('sections').doc(newCode()).set({name:n,host:me.id,hostName:me.name,created:Date.now()})
+  .then(()=>{msg='';mode='teacher';tab='Sections';render()}).catch(fail);
+}
+async function delSec(id){
+ const s=S.hosted.find(x=>x.id===id);if(!s)return;
+ const n=S.students.filter(u=>u.section===id).length;
+ if(!confirm('Delete "'+s.name+'" with its lessons, activities, results'+(n?' and remove its '+n+' student(s)':'')+'?'))return;
+ try{
+  const b=db.batch();
+  for(const c of ['materials','activities','subs','members'])(await col(c).where('section','==',id).get()).forEach(d=>b.delete(d.ref));
+  b.delete(col('sections').doc(id));
+  dying.add(id);wire();render();
+  await b.commit();
+ }catch(e){dying.delete(id);wire();fail(e)}
+}
+async function delStu(mid){
+ const u=S.students.find(x=>x.mid===mid);if(!u||!confirm('Remove '+u.name+' from '+secName(u.section)+' and delete their scores there?'))return;
+ try{
+  const b=db.batch();
+  (await col('subs').where('section','==',u.section).where('student','==',u.id).get()).forEach(d=>b.delete(d.ref));
+  b.delete(col('members').doc(mid));await b.commit();
+ }catch(e){fail(e)}
+}
+async function joinByCode(code){
+ code=String(code||'').trim().toLowerCase();
+ if(!code){msg='Enter a class code first.';render();return}
+ if(S.mine.some(m=>m.section===code)||S.hosted.some(s=>s.id===code)){
+  msg='You are already in that class.';render();return}
+ try{
+  const d=await col('sections').doc(code).get();
+  if(!d.exists){msg='That code was not found.';render();return}
+  if(d.data().host===me.id){msg='You are the teacher of that class.';render();return}
+  await col('members').doc(code+'_'+me.id).set({section:code,student:me.id,name:me.name,email:me.email,at:Date.now()});
+  msg='';joinCode=null;joinInfo=null;history.replaceState(null,'',location.pathname);mode='student';tab='Lessons';render();
+ }catch(e){fail(e)}
+}
+function leaveClass(mid){
+ const m=S.mine.find(x=>x.id===mid);if(!m||!confirm('Leave '+secName(m.section)+'? Your scores stay with the teacher.'))return;
+ col('members').doc(mid).delete().catch(fail);
+}
+
+function readFile(inp){
+ const f=inp.files[0];
+ if(!f)return;
+ if(!val('mt')) document.getElementById('mt').value = f.name.replace(/\.[^.]+$/, '');
+
+ const r=new FileReader();
+ r.onload=()=>{
+  if (typeof r.result === 'string' && f.type.startsWith('text/')) {
+   document.getElementById('mx').value = r.result;
+   uploadedFileMeta = null;
+  } else {
+   uploadedFileMeta = { name: f.name, size: f.size, type: f.type, dataUrl: r.result };
+  }
+ };
+ 
+ if (f.type.startsWith('text/')) {
+  r.readAsText(f);
+ } else {
+  r.readAsDataURL(f);
+ }
+}
+
+function addMat(){
+ const t=val('mt').trim(),x=val('mx').trim();
+ if(!t || (!x && !uploadedFileMeta)){alert('Add a title and either lesson text or a file.');return}
+ if(!val('ms')){alert('Create a section first.');return}
+ 
+ const payload = { title: t, level: val('ml'), section: val('ms'), text: x };
+ if (uploadedFileMeta) payload.fileMeta = uploadedFileMeta;
+ 
+ col('materials').add(payload).then(()=>{
+  uploadedFileMeta = null;
+  render();
+ }).catch(fail);
+}
+
+function delMat(id){col('materials').doc(id).delete().catch(fail)}
+function gen(){
+ const m=S.materials.find(x=>x.id===val('gm'));if(!m){alert('Upload a lesson first.');return}
+ const t=val('gt'),types=t==='mix'?['mc','tf','id']:[t];
+ let sourceText = (m.text && m.text.trim().length > 0) ? m.text : '';
+ if(!sourceText && m.fileMeta && m.fileMeta.dataUrl && m.fileMeta.dataUrl.startsWith('data:text/')) {
+  try { sourceText = atob(m.fileMeta.dataUrl.split(',')[1]); } catch(e){}
+ }
+ if(!sourceText) sourceText = m.title + ' ' + (m.fileMeta ? m.fileMeta.name : '');
+ 
+ const qs=generate(sourceText, +val('gn')||5, types);
+ draft={title:m.title+' Quiz',level:m.level,section:m.section,qs};render();
+}
+function publish(){
+ draft.title=val('at');draft.level=val('al');draft.section=val('as');draft.due=val('ad');
+ const d=draft;draft=null;tab='Activities';
+ col('activities').add({title:d.title,level:d.level,section:d.section,due:d.due,qs:d.qs}).catch(fail);render();
+}
+async function delAct(id){
+ const a=S.activities.find(x=>x.id===id);if(!a||!confirm('Delete this activity and its submissions?'))return;
+ try{const b=db.batch();(await col('subs').where('section','==',a.section).where('act','==',id).get()).forEach(d=>b.delete(d.ref));b.delete(col('activities').doc(id));await b.commit()}catch(e){fail(e)}
+}
+function startAct(id){taking=id;render()}
+function submitAct(){
+ const a=S.activities.find(x=>x.id===taking);
+ if(S.subs.some(s=>s.act===a.id&&s.student===me.id)){taking=null;render();return}
+ const ans=a.qs.map((q,i)=>{
+  if(q.t==='id')return document.querySelector(`[name=q${i}]`).value;
+  const c=document.querySelector(`[name=q${i}]:checked`);return c?c.value:'';});
+ const score=grade(a,ans);
+ col('subs').doc(a.id+'_'+me.id).set({act:a.id,section:a.section,student:me.id,answers:ans,score,total:a.qs.length,at:Date.now()}).catch(fail);
+ taking=null;tab='My Scores';render();
+}
+</script>
+</body>
+</html>
