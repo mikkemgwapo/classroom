@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AI Learning Management System</title>
+<title>LearnITAll - Learning Management System</title>
 <style>
 :root{--bg:#f1f5f9;--card:#fff;--tx:#1e293b;--mu:#64748b;--br:#cbd5e1;--pr:#1d4ed8;--prh:#1e40af;--ok:#16a34a;--bad:#dc2626}
 @media (prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#0f172a;--card:#1e293b;--tx:#e2e8f0;--mu:#94a3b8;--br:#334155;--pr:#3b82f6;--prh:#2563eb}}
@@ -198,7 +198,7 @@ function render(){
  if(!m){A.innerHTML=onboardView();return}
  const tabs=m==='teacher'?['Dashboard','Tracking','Sections','Materials','Create Quiz','Activities','Results']:['Lessons','Activities','My Scores','Classes'];
  if(!tab||!tabs.includes(tab))tab=tabs[0];
- A.innerHTML=`<header><b>AI LMS &middot; ${esc(me.name)} (${m})</b>
+ A.innerHTML=`<header><b>LearnITAll &middot; ${esc(me.name)} (${m})</b>
  <nav>${tabs.map(t=>`<button class="${t===tab?'on':''}" onclick="go('${t}')">${t}</button>`).join('')}<button onclick="switchMode()">${m==='teacher'?'Student view':'Teacher view'}</button><button onclick="logout()">Log out</button></nav></header>
  <main>${joinBanner()}${msg?`<div class="card bad">${esc(msg)}</div>`:''}${taking?takeView():body()}</main>`;
 }
@@ -208,13 +208,13 @@ function body(){
 }
 function switchMode(){mode=curMode()==='teacher'?'student':'teacher';tab='';taking=null;msg='';render()}
 function loginView(){
- return `<div class="login card"><h2>AI Learning Management System</h2>
+ return `<div class="login card"><h2>LearnITAll</h2>
  ${joinCode?'<p>You were invited to join a class. Sign in with your Google account to continue.</p>':'<p class="mu">Sign in with your Gmail / Google account.</p>'}
  <button class="btn" style="width:100%" onclick="signIn()">Sign in with Google</button>
  <div class="err">${esc(msg)}</div></div>`;
 }
 function onboardView(){
- return `<div class="login card"><h2>Welcome, ${esc(authed.displayName||'')}</h2>
+ return `<div class="login card"><h2>Welcome to LearnITAll, ${esc(authed.displayName||'')}</h2>
  <p class="mu">Signed in as ${esc(authed.email)}</p>
  ${joinBanner()}
  <h3>Join a class as a student</h3>
@@ -236,34 +236,89 @@ function joinBanner(){
 function Dashboard(){
  const S=scoped();
  const scored=S.subs.map(s=>s.score/s.total*100),avg=scored.length?Math.round(scored.reduce((a,b)=>a+b,0)/scored.length):0;
+ 
+ const sectionActivityCounts = S.sections.map(sec => {
+  const secActs = S.activities.filter(a => a.section === sec.id);
+  return { name: sec.name, count: secActs.length, activities: secActs };
+ });
+
  return `<div class="row">
- ${[['Students',S.students.length],['Sections',S.sections.length],['Lessons',S.materials.length],['Activities',S.activities.length],['Submissions',S.subs.length],['Average score',avg+'%']]
- .map(([k,v])=>`<div class="card"><div class="mu">${k}</div><div class="big">${v}</div></div>`).join('')}</div>`;
+ ${[['Students',S.students.length],['Sections',S.sections.length],['Lessons',S.materials.length],['Activities Created',S.activities.length],['Submissions',S.subs.length],['Average score',avg+'%']]
+ .map(([k,v])=>`<div class="card"><div class="mu">${k}</div><div class="big">${v}</div></div>`).join('')}</div>
+ 
+ <div class="card">
+  <h2>Activities Given per Section</h2>
+  ${sectionActivityCounts.length ? `
+   <table>
+    <tr><th>Section Name</th><th>Total Activities Given</th><th>Activity Titles</th></tr>
+    ${sectionActivityCounts.map(sa => `
+     <tr>
+      <td><b>${esc(sa.name)}</b></td>
+      <td><span class="tag">${sa.count}</span></td>
+      <td>${sa.activities.length ? sa.activities.map(a => `<span style="display:inline-block; margin-right:8px;">&bull; ${esc(a.title)}</span>`).join('') : '<span class="mu">No activities given yet</span>'}</td>
+     </tr>
+    `).join('')}
+   </table>
+  ` : '<p class="mu">No sections created yet.</p>'}
+ </div>`;
 }
 function Tracking(){
  const V=scoped(),now=new Date();
- const rows=V.students.filter(u=>trackSec==='all'||u.section===trackSec).map(u=>{
-  const acts=V.activities.filter(a=>a.section===u.section),subs=V.subs.filter(x=>x.student===u.id&&x.section===u.section);
-  const done=acts.filter(a=>subs.some(x=>x.act===a.id)).length;
-  const missed=acts.filter(a=>a.due&&new Date(a.due)<now&&!subs.some(x=>x.act===a.id)).length;
-  const pct=subs.length?Math.round(subs.reduce((t,x)=>t+x.score/x.total*100,0)/subs.length):null;
-  const last=subs.length?Math.max(...subs.map(x=>x.at||0)):0;
-  const st=!acts.length?['No activities','mu']:(missed||(pct!==null&&pct<60))?['Needs attention','bad']:pct===null?['Not started','mu']:['On track','ok'];
-  return {u,acts,subs,done,missed,pct,last,st};});
- const d=trackStu&&rows.find(r=>r.u.mid===trackStu);
- return `<div class="card"><h2>Student tracking</h2>
- <label>Section</label><select onchange="trackSec=this.value;trackStu=null;render()"><option value="all">All my sections</option>${V.sections.map(s=>`<option value="${s.id}" ${s.id===trackSec?'selected':''}>${esc(s.name)}</option>`).join('')}</select>
- <p class="mu">Click a student to see every activity.</p>
- <table><tr><th>Student</th><th>Done</th><th>Average</th><th>Missed</th><th>Last submitted</th><th>Status</th></tr>
- ${rows.map(r=>`<tr style="cursor:pointer" onclick="trackStu='${r.u.mid}';render()"><td>${esc(r.u.name)}<div class="mu">${esc(secName(r.u.section))}</div></td><td>${r.done}/${r.acts.length}</td><td>${r.pct===null?'-':r.pct+'%'}</td><td>${r.missed}</td><td>${r.last?new Date(r.last).toLocaleDateString():'-'}</td><td class="${r.st[1]}"><b>${r.st[0]}</b></td></tr>`).join('')||'<tr><td colspan=6 class="mu">No students yet.</td></tr>'}</table></div>
- ${d?trackDetail(d,now):''}`;
+ const filteredSections = trackSec === 'all' ? V.sections : V.sections.filter(s => s.id === trackSec);
+ 
+ let content = `<div class="card"><h2>Student tracking</h2>
+ <label>Filter by Section</label>
+ <select onchange="trackSec=this.value;trackStu=null;render()">
+  <option value="all">All my sections</option>
+  ${V.sections.map(s=>`<option value="${s.id}" ${s.id===trackSec?'selected':''}>${esc(s.name)}</option>`).join('')}
+ </select>
+ <p class="mu" style="margin-top:8px">Click any student row to see their detailed activity performance.</p>`;
+
+ if(filteredSections.length === 0){
+  content += `<p class="mu" style="margin-top:12px">No sections found.</p>`;
+ } else {
+  filteredSections.forEach(sec => {
+   const secStudents = V.students.filter(u => u.section === sec.id);
+   const acts = V.activities.filter(a => a.section === sec.id);
+   
+   content += `<h3 style="margin-top:20px; border-bottom:1px solid var(--br); padding-bottom:6px;">📁 Section: ${esc(sec.name)}</h3>`;
+   
+   if(secStudents.length === 0){
+    content += `<p class="mu">No students enrolled in this section yet.</p>`;
+    return;
+   }
+
+   const rows = secStudents.map(u => {
+    const subs = V.subs.filter(x => x.student === u.id && x.section === u.section);
+    const done = acts.filter(a => subs.some(x => x.act === a.id)).length;
+    const missed = acts.filter(a => a.due && new Date(a.due) < now && !subs.some(x => x.act === a.id)).length;
+    const pct = subs.length ? Math.round(subs.reduce((t, x) => t + x.score / x.total * 100, 0) / subs.length) : null;
+    const last = subs.length ? Math.max(...subs.map(x => x.at || 0)) : 0;
+    const st = !acts.length ? ['No activities', 'mu'] : (missed || (pct !== null && pct < 60)) ? ['Needs attention', 'bad'] : pct === null ? ['Not started', 'mu'] : ['On track', 'ok'];
+    return { u, acts, subs, done, missed, pct, last, st };
+   });
+
+   content += `<table><tr><th>Student</th><th>Done</th><th>Average</th><th>Missed</th><th>Last submitted</th><th>Status</th></tr>
+   ${rows.map(r=>`<tr style="cursor:pointer" onclick="trackStu='${r.u.mid}';render()"><td><b>${esc(r.u.name)}</b><div class="mu">${esc(r.u.email)}</div></td><td>${r.done}/${r.acts.length}</td><td>${r.pct===null?'-':r.pct+'%'}</td><td>${r.missed}</td><td>${r.last?new Date(r.last).toLocaleDateString():'-'}</td><td class="${r.st[1]}"><b>${r.st[0]}</b></td></tr>`).join('')}</table>`;
+  });
+ }
+
+ content += `</div>`;
+ const d = trackStu && V.students.find(u => u.mid === trackStu) ? {
+  u: V.students.find(u => u.mid === trackStu),
+  acts: V.activities.filter(a => a.section === V.students.find(u => u.mid === trackStu).section),
+  subs: V.subs.filter(x => x.student === V.students.find(u => u.mid === trackStu).id && x.section === V.students.find(u => u.mid === trackStu).section)
+ } : null;
+
+ if (d) content += trackDetail(d, now);
+ return content;
 }
 function trackDetail(d,now){
- return `<div class="card"><h3>${esc(d.u.name)} &middot; ${esc(secName(d.u.section))}</h3>
+ return `<div class="card"><h3>Student Details: ${esc(d.u.name)} &middot; ${esc(secName(d.u.section))}</h3>
  <table><tr><th>Activity</th><th>Due</th><th>Result</th></tr>
  ${d.acts.map(a=>{const x=d.subs.find(s=>s.act===a.id),late=a.due&&new Date(a.due)<now;
- return `<tr><td>${esc(a.title)}</td><td>${a.due?new Date(a.due).toLocaleString():'-'}</td><td>${x?`<span class="ok">${x.score}/${x.total} (${Math.round(x.score/x.total*100)}%)</span>`:late?'<span class="bad">Missed</span>':'<span class="mu">Pending</span>'}</td></tr>`}).join('')||'<tr><td colspan=3 class="mu">No activities yet.</td></tr>'}</table>
- <button class="btn s" onclick="trackStu=null;render()">Close</button></div>`;
+ return `<tr><td>${esc(a.title)}</td><td>${a.due?new Date(a.due).toLocaleString():'-'}</td><td>${x?`<span class="ok">${x.score}/${x.total} (${Math.round(x.score/x.total*100)}%)</span>`:late?'<span class="bad">Missed</span>':'<span class="mu">Pending</span>'}</td></tr>`}).join('')||'<tr><td colspan=3 class="mu">No activities for this section yet.</td></tr>'}</table>
+ <button class="btn s" onclick="trackStu=null;render()">Close Details</button></div>`;
 }
 function Sections(){
  const V=scoped();
@@ -405,9 +460,16 @@ async function delStu(mid){
 }
 async function joinByCode(code){
  code=String(code||'').trim().toLowerCase();
- if(!code){msg='Enter a class code first.';render();return}
+ if(!code){
+  msg='Please enter a valid class code first.';
+  render();
+  return;
+ }
  if(S.mine.some(m=>m.section===code)||S.hosted.some(s=>s.id===code)){
-  msg='You are already in that class.';render();return}
+  msg='You are already in that class.';
+  render();
+  return;
+ }
  try{
   const d=await col('sections').doc(code).get();
   if(!d.exists){msg='That code was not found.';render();return}
